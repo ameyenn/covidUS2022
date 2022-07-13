@@ -1,0 +1,176 @@
+#Exporation of US covid statistics
+#Author: Andrew Meyenn
+#Date: 12/7/2022
+
+library(data.table)
+library(factoextra)
+library("GGally")
+library(tidyverse)
+library(tidygraph)
+library(dplyr)
+library(Hmisc)
+
+#The data file containes a range of stats, 20 fields. We will conside firsly
+#WP white proportion of State, BP black proportion of State and compare these
+#as expected again the WD white deaths and BD black deaths
+#a code book has been placed on the githib site
+setwd("C:/Users/Cathie/SkyDrive/Rprogs")
+
+df<-fread("./Covid/USCovid.csv") #available on github site
+str(df)
+df<-df %>% remove_rownames %>% column_to_rownames(var="Code") #set rownames
+
+
+####Check distribution and correlations. PCA works well with good correlation
+
+ggpairs(df[, c(2,4:12)]) #library(GGally)
+
+####The data file contains diffW and diffB fields, these are the difference
+####between observed and expected deaths from covide
+#The plot shows large deviation between W and less for B
+
+plot(df$diffW, type="l", xaxt="n", main="US WD%-WP% and BD%-BP%", ylim=c(-0.20, 0.30)) 
+abline(h=0)
+lines(df$diffB, cex=0.85, col="red")
+axis(1, 1:nrow(df), labels=rownames(df), cex.axis=0.7)
+
+#basic stats
+#there seems to be a significant negative correlation between diffW nd diffB.
+#NOTE the outlier, which DC where many more B deaths occured compared to W.
+#are we convinced!
+
+cor(df$diffW, df$diffB)
+cor.test(df$diffW, df$diffB)
+library(car)
+scatterplot(x=df$diffW, y=df$diffB)      
+
+
+#PCA, but before do some tests. We already know that there is little correlation
+#and little normal distribution, although PCA does not need this, and we can certanly
+#do some factor analysis with non-normal data
+
+cm <- cor(df[, c(2, 4:6)])
+KMO(cm) #in theory Pov should come out <0.5, the others are ok, overall 0.73 OK
+#hence we can say that these are contributing to the overall variance so it
+#is useful to use PCA.
+#you can run PCA just be careful with Pov in, compare to if not included.
+colnames(df)
+#PCA does it seem reasonable
+pca<-prcomp(df[,c(2, 4:6)], scale=TRUE) 
+screeplot(pca)
+fviz_pca_biplot(pca, habillage = df$Party) 
+
+#check the correlations
+#these accord with the biplot. Pov is at 90degree and this means no correlation
+#TC, TD and POP are close and lie along PC1 or DIM1 and capture 74% of variance
+
+cor(df[,c(2,4:6)])
+
+#this is saying that cases and deaths and pop are correlated, each pop is bigger
+#we get more cases and deaths. 
+
+#we can look what are termed rotations to the contribution of each variable/field
+#to each PC, this is what the biplot is saying.
+
+as.data.frame(pca$rotation[,1:2])
+
+#### INVESTIAGTE Dendrogram and clusters
+hc <- hclust(dist(as.data.table(df[,c(2,4:12)])), "ave")
+dend1 <- as.dendrogram(hc)
+plot(dend1)
+
+####check clusterabilit and plot Clusters
+cl<-get_clust_tendency(data = df[,c(2,4:12)], n = 5)
+cl$hopkins_stat #near 1 good to go
+
+sub_grp <- cutree(hc, k = 3)
+table(sub_grp)
+plot(hc, cex = 0.6)
+rect.hclust(hc, k = 6, border = 2:5)
+fviz_cluster(list(data = df[,c(2, 4:12)], cluster = sub_grp))
+
+# Compute PAM Clusters version 1 - simplest syntax structure - many available
+library("cluster")
+p<- pam(df[,c(2, 4:12)], 3) #3 is the desired clusters, three 3 etc. Observation looks like Pop
+# Visualize
+fviz_cluster(p)
+
+##Heatmap
+dfScale<-scale(df[,c(2, 4:12)])
+heatmap(dfScale, scale = "col")
+
+##test proportion difference for WD v's WP
+results <- c()
+for (i in 1:51){
+  pp<-prop.test(x=df[i,5]*df[i,7], n=df[i,5], p=df[i, 8], alternative="two.sided")
+  results[[i]]<-pp$p.value
+}
+results #many states have p<0.05 reject Ho, proprotions different than expected 
+
+#repeat for BD v BP
+results <- c()
+for (i in 1:51){
+  pp<-prop.test(x=df[i,5]*df[i,10], n=df[i,5], p=df[i, 11], alternative="two.sided")
+  results[[i]]<-pp$p.value
+}
+results #many more p>0.05 accept Ho, proprotions not different, but are in some
+
+#Investigate the Means Pop and TD and compare
+sumPop<-sum(df$Pop)
+sumDth<-sum(df$TD)
+grPop<-aggregate(df$Pop, by = list(gr=df$Party), FUN = sum)
+grDeaths<-aggregate(df$TD, by = list(gr=df$Party), FUN = sum)
+grPop #Democrat = 2, larger than Rep
+grDeaths #Deaths Rep > Deaths Dem
+
+#
+group_by(df, Party) %>%
+  summarise(
+    count = n(),
+    median = median(Pop),
+    mean = mean(Pop)
+  )
+library("ggpubr")
+ggboxplot(df, x = "Party", y = c(BD"), 
+          color = "Party", palette = c("#00AFBB", "#E7B800"),
+          ylab = "BD", xlab = "Party")
+
+
+#check democrat deaths v pop proportion
+a1<-grDeaths[1,2]/sumDth
+a2<-grPop[1,2]/sumPop
+a1 #2=Dem 0.52, 1=Rep 0.47
+a2 #2=Dem 0.55, 1=Rep 0.44
+#observed death rate is less than democrat pop proportion
+#observed deaths, observed deaths, expect pop prop
+
+prop.test(x=a1, n=sumDth, p=a2, alternative="two.sided") 
+
+#reject Ho, p<0.05, hence prop less than pop proportion
+
+
+#Investigate deaths > 65, roughly 75% > 65y are W AND 10% B, 
+#overall 16% of US pop is 65years or greater
+#Pop is overall W 62% and B 13.4%
+#The number values are in the data file, see the plot names below
+
+plot(df$Dunder55, type="l",main="Deaths <55, 55 to 65, >65", xaxt="n", ylim=c(0, 100000))
+lines(df$`D55-65`, type="l", col="red")
+lines(df$D65, type="l", col="blue")
+axis(1, 1:nrow(df), labels=rownames(df), cex.axis=0.7)
+
+#note the large discrpency of the blue line >65!
+#the two means of the difference in observed deaths vs expected based on pop proportion
+#are shown below
+mean(df$diffW) #0.036
+mean(df$diffB) #0.014
+
+#another way to look at this is to note that 75% of people aged over 65 are W and
+#we would expect that 75% of the deaths over 65 are W, 10% would be B.
+#hence 75-62 = 13% More W, and 10-13.4 = -3.4 less are B
+
+#BUT is this expected, I can't find observed data to finish the story
+
+
+
+
